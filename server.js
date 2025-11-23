@@ -1,4 +1,4 @@
-require("dotenv").config();     
+require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const socketio = require("socket.io");
@@ -8,9 +8,7 @@ const session = require("express-session");
 const MongoStore = require("connect-mongo");
 const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
-
 const { Resend } = require("resend");
-const resend = new Resend(process.env.RESEND_API_KEY);
 
 const User = require("./models/User");
 const Message = require("./models/Message");
@@ -18,6 +16,9 @@ const Message = require("./models/Message");
 const app = express();
 const server = http.createServer(app);
 const io = socketio(server);
+
+// ====== Trust Proxy for HTTPS (Koyeb, Heroku, etc.) ======
+app.set("trust proxy", 1);
 
 // ====== Middlewares ======
 app.use(express.urlencoded({ extended: true }));
@@ -32,6 +33,7 @@ app.use(
     secret: process.env.SESSION_SECRET || "supersecret",
     resave: false,
     saveUninitialized: false,
+    cookie: { secure: true }, // HTTPS only
     store: MongoStore.create({ mongoUrl: process.env.MONGO_URI }),
   })
 );
@@ -46,43 +48,40 @@ passport.deserializeUser(async (id, done) => {
   done(null, user);
 });
 
+// ====== Google OAuth ======
+const GOOGLE_CALLBACK =
+  process.env.GOOGLE_CALLBACK_URL ||
+  "https://square.koyeb.app/auth/google/callback";
+
 passport.use(
   new GoogleStrategy(
     {
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "/auth/google/callback",
+      callbackURL: GOOGLE_CALLBACK,
     },
     async (accessToken, refreshToken, profile, done) => {
       let user = await User.findOne({ googleId: profile.id });
-
       if (!user) {
-        // Create new user (requesting access)
         user = await User.create({
           googleId: profile.id,
           username: profile.displayName,
           email: profile.emails[0].value,
-          isAllowed: false,
+          isAllowed: false, // admin approval
         });
 
-        // Notify admin via Socket
+        // Notify admin via dashboard
         io.emit("newUserRequest", { username: user.username });
 
-        // Notify admin via email  
+        // Notify admin via email
         sendAdminEmail(user);
       }
-
-      return done(null, user);
+      done(null, user);
     }
   )
 );
 
-// ====== Helper Middleware ======
-function checkSecret(req, res, next) {
-  if (req.session.secretValidated) return next();
-  res.redirect("/");
-}
-
+// ====== Helper Middlewares ======
 function isLoggedIn(req, res, next) {
   if (req.user) return next();
   res.redirect("/");
@@ -99,20 +98,22 @@ mongoose
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.log(err));
 
-// ====== Email Notification (Resend) ======
+// ====== Resend Email Notification ======
+const resend = new Resend(process.env.RESEND_API_KEY);
+
 async function sendAdminEmail(newUser) {
   try {
     await resend.emails.send({
       from: "Chatroom <onboarding@resend.dev>",
       to: process.env.ADMIN_NOTIFY_EMAIL,
       subject: "New Chatroom Access Request",
-      html: `<p><strong>${newUser.username}</strong> has requested access to the chatroom.</p>
-             <p>Email: ${newUser.email}</p>`
+      html: `<h2>New User Request</h2>
+             <p><strong>${newUser.username}</strong> wants access to chatroom.</p>
+             <p>Email: ${newUser.email}</p>`,
     });
-
-    console.log("Admin notified via email");
+    console.log("✔ Admin notified via email");
   } catch (err) {
-    console.error("Email error:", err);
+    console.error("❌ Email error:", err.message);
   }
 }
 
@@ -123,11 +124,12 @@ app.post("/validate-secret", (req, res) => {
   const secret = req.body.secret?.trim();
   if (secret === process.env.SECRET_WORD) {
     req.session.secretValidated = true;
-    res.redirect("/auth/google");
-  } else res.send("<h2>❌ Wrong secret key!</h2>");
+    return res.redirect("/auth/google");
+  }
+  res.send("<h2>❌ Wrong secret key!</h2>");
 });
 
-// Google Auth
+// Google OAuth
 app.get(
   "/auth/google",
   (req, res, next) => {
@@ -143,20 +145,24 @@ app.get(
   (req, res) => res.redirect("/chat")
 );
 
-// Chat page
+// Chat
 app.get("/chat", isLoggedIn, async (req, res) => {
   if (!req.user.isAllowed)
-    return res.send("<h2>❌ You are not approved by admin yet.</h2>");
-  
+    return res.send("<h2>❌ You are not approved yet by admin.</h2>");
+
   const messages = await Message.find().sort({ timestamp: 1 });
   res.render("chat", { username: req.user.username, messages });
 });
 
-app.get("/logout", (req, res) => {
-  req.logout(() => req.session.destroy(() => res.redirect("/")));
+app.get("/logout", (req, res) =>
+  req.logout(() => req.session.destroy(() => res.redirect("/")))
+);
+// Privacy Policy page
+app.get("/privacy", (req, res) => {
+  res.render("privacy"); // render views/privacy.ejs
 });
 
-// ====== Admin Panel ======
+// ====== Admin ======
 app.get("/admin/login", (req, res) => res.render("admin-login"));
 
 app.post("/admin/login", (req, res) => {
@@ -176,7 +182,7 @@ app.get("/admin", isAdmin, async (req, res) => {
   res.render("admin", { users });
 });
 
-// Toggle user approval
+// Approve/unapprove
 app.post("/admin/toggle/:id", isAdmin, async (req, res) => {
   const user = await User.findById(req.params.id);
   if (!user) return res.send("User not found");
@@ -187,7 +193,7 @@ app.post("/admin/toggle/:id", isAdmin, async (req, res) => {
   res.redirect("/admin");
 });
 
-// Delete user
+// Delete
 app.post("/admin/delete/:id", isAdmin, async (req, res) => {
   await User.findByIdAndDelete(req.params.id);
   res.redirect("/admin");
