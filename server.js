@@ -101,19 +101,17 @@ app.get("/auth/google",
   passport.authenticate("google", { scope: ["profile", "email"] })
 );
 
-app.get("/auth/google/callback",
-  passport.authenticate("google", { failureRedirect: "/auth/fail" }),
+app.get(
+  "/auth/google/callback",
+  passport.authenticate("google", { failureRedirect: "/" }),
   (req, res) => {
-    res.json({
-      success: true,
-      user: {
-        id: req.user._id,
-        username: req.user.username,
-        isAllowed: req.user.isAllowed,
-      },
-    });
+    // Redirect back to Ionic app
+    res.redirect("http://localhost:8100");
+    // production mein:
+    // res.redirect("myapp://login");
   }
 );
+
 
 app.get("/auth/fail", (req, res) =>
   res.status(401).json({ success: false })
