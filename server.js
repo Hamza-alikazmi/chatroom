@@ -106,9 +106,9 @@ app.get(
   passport.authenticate("google", { failureRedirect: "/" }),
   (req, res) => {
     // Redirect back to Ionic app
-    //res.redirect("http://localhost:8100");
+    res.redirect("http://localhost:8100");
     // production mein:
-     res.redirect("myapp://login");
+     //res.redirect("myapp://login");
   }
 );
 
