@@ -10,6 +10,8 @@ const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const cors = require("cors");
 const { Resend } = require("resend");
+const jwt = require("jsonwebtoken");
+
 
 const User = require("./models/User");
 const Message = require("./models/Message");
@@ -105,12 +107,21 @@ app.get(
   "/auth/google/callback",
   passport.authenticate("google", { failureRedirect: "/" }),
   (req, res) => {
-    // Redirect back to Ionic app
-    //res.redirect("http://localhost:8100");
-    // production mein:
-     res.redirect("myapp://login");
+    const token = jwt.sign(
+      {
+        id: req.user._id,
+        username: req.user.username,
+        isAllowed: req.user.isAllowed,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    // Deep link back to mobile app
+    res.redirect(`myapp://login?token=${token}`);
   }
 );
+
 
 
 app.get("/auth/fail", (req, res) =>
