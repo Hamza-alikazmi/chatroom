@@ -11,7 +11,7 @@ const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const cors = require("cors");
 const { Resend } = require("resend");
 const jwt = require("jsonwebtoken");
-
+const authJWT = require("./middlewares/auth");
 
 const User = require("./models/User");
 const Message = require("./models/Message");
@@ -133,13 +133,18 @@ app.get("/logout", (req, res) => {
 });
 
 // ====== User API (SAME ROUTES) ======
-app.get("/me", (req, res) => {
-  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-  res.json(req.user);
+app.get("/me", authJWT, (req, res) => {
+  res.json({
+    id: req.user._id,
+    username: req.user.username,
+    email: req.user.email,
+    isAllowed: req.user.isAllowed,
+  });
 });
 
+
 // ====== Chat APIs (SAME ROUTES) ======
-app.get("/chat/messages", async (req, res) => {
+app.get("/chat/messages",authJWT, async (req, res) => {
   if (!req.user || !req.user.isAllowed)
     return res.status(403).json({ error: "Not approved" });
 
