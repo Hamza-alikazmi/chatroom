@@ -1,0 +1,51 @@
+<div class="max-w-6xl mx-auto py-6">
+  <h1 class="text-2xl font-bold mb-4">Admin Panel</h1>
+  <table class="min-w-full bg-white shadow-md rounded-lg overflow-hidden">
+    <thead class="bg-gray-200">
+      <tr>
+        <th class="px-4 py-2 text-left">Username</th>
+        <th class="px-4 py-2 text-left">Email</th>
+        <th class="px-4 py-2 text-center">Approved</th>
+        <th class="px-4 py-2 text-center">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% users.forEach(user => { %>
+      <tr class="border-b">
+        <td class="px-4 py-2"><%= user.username %></td>
+        <td class="px-4 py-2"><%= user.email %></td>
+        <td class="px-4 py-2 text-center">
+          <%= user.isAllowed ? '✅' : '❌' %>
+        </td>
+        <td class="px-4 py-2 text-center space-x-2">
+          <form class="inline" method="POST" action="/admin/toggle/<%= user._id %>">
+            <button class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded">
+              <%= user.isAllowed ? 'Unapprove' : 'Approve' %>
+            </button>
+          </form>
+          <form class="inline" method="POST" action="/admin/delete/<%= user._id %>" onsubmit="return confirm('Are you sure?');">
+            <button class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded">Delete</button>
+          </form>
+        </td>
+      </tr>
+      <% }) %>
+    </tbody>
+  </table>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket = io();
+
+socket.on("newUserRequest", (data) => {
+  if (Notification.permission === "granted") {
+    new Notification("New User Request", {
+      body: `${data.username} requested access.`,
+      icon: "/admin-icon.png"
+    });
+  }
+});
+
+if (Notification.permission !== "granted") {
+  Notification.requestPermission();
+}
+</script>
