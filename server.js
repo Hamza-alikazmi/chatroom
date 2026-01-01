@@ -214,22 +214,24 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-socket.on("sendMessage", async (data) => {
-  if (!socket.user.isAllowed) return;
+  socket.on("sendMessage", async (data) => {
+    if (!socket.user.isAllowed) return;
 
-  const msg = await Message.create({
-    text: data.text,
-    user: socket.user.id,
-    timestamp: new Date(),
-  });
+    if (!data.text) return;
 
-  io.emit("newMessage", {
-    text: msg.text,
-    user: socket.user.id,
-    timestamp: msg.timestamp,
+    const msg = await Message.create({
+      username: socket.user.username,
+      message: data.text
+    });
+
+    io.emit("newMessage", {
+      username: msg.username,
+      message: msg.message,
+      time: msg.time
+    });
   });
 });
-});
+
 
 // ====== START ======
 const PORT = process.env.PORT || 3000;
