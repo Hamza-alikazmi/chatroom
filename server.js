@@ -1,14 +1,12 @@
-// server.js (Backend API – JSON only)
 require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const socketio = require("socket.io");
 const mongoose = require("mongoose");
-const session = require("express-session");
-const MongoStore = require("connect-mongo");
 const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const cors = require("cors");
+const jwt = require("jsonwebtoken");
 const { Resend } = require("resend");
 
 const User = require("./models/User");
@@ -16,51 +14,27 @@ const Message = require("./models/Message");
 
 const app = express();
 const server = http.createServer(app);
+
 const io = socketio(server, {
   cors: {
-    origin: true,
-    credentials: true,
+    origin: "*",
     methods: ["GET", "POST"],
   },
 });
 
-// ================== MIDDLEWARES ==================
-app.use(cors({ origin: true, credentials: true }));
+// ====== Middlewares ======
+app.use(cors({ origin: true }));
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.set("trust proxy", 1);
 
-// ================== SESSION ==================
-app.use(
-  session({
-    name: "chatroom.sid",
-    secret: process.env.SESSION_SECRET || "supersecret",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: true,
-      sameSite: "none",
-    },
-    store: MongoStore.create({ mongoUrl: process.env.MONGO_URI }),
-  })
-);
+// ====== MongoDB ======
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log("MongoDB connected"))
+  .catch(console.error);
 
-// ================== PASSPORT ==================
+// ====== Passport ======
 app.use(passport.initialize());
-app.use(passport.session());
 
-passport.serializeUser((user, done) => done(null, user.id));
-
-passport.deserializeUser(async (id, done) => {
-  try {
-    const user = await User.findById(id);
-    done(null, user);
-  } catch (err) {
-    done(err);
-  }
-});
-
-// ================== GOOGLE OAUTH ==================
 passport.use(
   new GoogleStrategy(
     {
@@ -69,36 +43,40 @@ passport.use(
       callbackURL: process.env.GOOGLE_CALLBACK_URL,
     },
     async (accessToken, refreshToken, profile, done) => {
-      try {
-        let user = await User.findOne({ googleId: profile.id });
+      let user = await User.findOne({ googleId: profile.id });
 
-        if (!user) {
-          user = await User.create({
-            googleId: profile.id,
-            username: profile.displayName,
-            email: profile.emails?.[0]?.value,
-            isAllowed: false,
-          });
+      if (!user) {
+        user = await User.create({
+          googleId: profile.id,
+          username: profile.displayName,
+          email: profile.emails[0].value,
+          isAllowed: false,
+        });
 
-          io.emit("newUserRequest", { username: user.username });
-          sendAdminEmail(user).catch(console.error);
-        }
-
-        done(null, user);
-      } catch (err) {
-        done(err);
+        io.emit("newUserRequest", { username: user.username });
+        sendAdminEmail(user);
       }
+
+      done(null, user);
     }
   )
 );
 
-// ================== DATABASE ==================
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch(console.error);
+// ====== JWT Middleware ======
+function jwtAuth(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth) return res.status(401).json({ error: "No token" });
 
-// ================== EMAIL (RESEND) ==================
+  try {
+    const token = auth.split(" ")[1];
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: "Invalid token" });
+  }
+}
+
+// ====== Resend ======
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 async function sendAdminEmail(user) {
@@ -106,29 +84,11 @@ async function sendAdminEmail(user) {
     from: "Chatroom <onboarding@resend.dev>",
     to: process.env.ADMIN_NOTIFY_EMAIL,
     subject: "New Chatroom Access Request",
-    html: `<p><strong>${user.username}</strong> (${user.email}) requested access.</p>`,
+    html: `<p>${user.username} (${user.email}) requested access.</p>`,
   });
 }
 
-async function sendChatroomEmails({ sender, message }) {
-  const users = await User.find({
-    isAllowed: true,
-    email: { $exists: true, $ne: null },
-    username: { $ne: sender },
-  }).select("email");
-
-  if (!users.length) return;
-
-  await resend.emails.send({
-    from: "Chatroom <notifications@resend.dev>",
-    to: users.map((u) => u.email),
-    subject: `You have new message...`,
-    html: `<p> One of your classmate have sent you a new message:</p>
-    `,
-  });
-}
-
-// ================== AUTH ROUTES ==================
+// ====== AUTH ROUTES ======
 app.get(
   "/auth/google",
   passport.authenticate("google", { scope: ["profile", "email"] })
@@ -136,45 +96,38 @@ app.get(
 
 app.get(
   "/auth/google/callback",
-  passport.authenticate("google", { failureRedirect: "/auth/fail" }),
+  passport.authenticate("google", { session: false }),
   (req, res) => {
-    res.json({
-      success: true,
-      user: {
+    const token = jwt.sign(
+      {
         id: req.user._id,
         username: req.user.username,
         isAllowed: req.user.isAllowed,
       },
-    });
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.redirect(`myapp://login?token=${token}`);
   }
 );
 
-app.get("/auth/fail", (req, res) =>
-  res.status(401).json({ success: false })
-);
-
-app.get("/logout", (req, res) => {
-  req.logout(() =>
-    req.session.destroy(() => res.json({ success: true }))
-  );
+// ====== USER API ======
+app.get("/me", jwtAuth, async (req, res) => {
+  const user = await User.findById(req.user.id);
+  res.json(user);
 });
 
-// ================== USER API ==================
-app.get("/me", (req, res) => {
-  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-  res.json(req.user);
-});
-
-// ================== CHAT API ==================
-app.get("/chat/messages", async (req, res) => {
-  if (!req.user || !req.user.isAllowed)
+// ====== CHAT API ======
+app.get("/chat/messages", jwtAuth, async (req, res) => {
+  if (!req.user.isAllowed)
     return res.status(403).json({ error: "Not approved" });
 
   const messages = await Message.find().sort({ timestamp: 1 });
   res.json(messages);
 });
 
-// ================== ADMIN API ==================
+// ====== ADMIN (JWT BASED) ======
 app.post("/admin/login", (req, res) => {
   const { username, password } = req.body;
 
@@ -182,71 +135,72 @@ app.post("/admin/login", (req, res) => {
     username === process.env.ADMIN_USERNAME &&
     password === process.env.ADMIN_PASSWORD
   ) {
-    req.session.adminLoggedIn = true;
-    return res.json({ success: true });
+    const token = jwt.sign(
+      { admin: true },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+    return res.json({ token });
   }
 
-  res.status(401).json({ success: false });
+  res.status(401).json({ error: "Invalid credentials" });
 });
 
-app.get("/admin", async (req, res) => {
-  if (!req.session.adminLoggedIn)
-    return res.status(403).json({ error: "Forbidden" });
+function adminAuth(req, res, next) {
+  try {
+    const token = req.headers.authorization.split(" ")[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (!decoded.admin) throw Error();
+    next();
+  } catch {
+    res.status(403).json({ error: "Forbidden" });
+  }
+}
 
+app.get("/admin/users", adminAuth, async (req, res) => {
   const users = await User.find();
   res.json(users);
 });
 
-app.post("/admin/toggle/:id", async (req, res) => {
-  if (!req.session.adminLoggedIn)
-    return res.status(403).json({ error: "Forbidden" });
-
+app.post("/admin/toggle/:id", adminAuth, async (req, res) => {
   const user = await User.findById(req.params.id);
   user.isAllowed = !user.isAllowed;
   await user.save();
-
   res.json({ success: true });
 });
 
-app.post("/admin/delete/:id", async (req, res) => {
-  if (!req.session.adminLoggedIn)
-    return res.status(403).json({ error: "Forbidden" });
-
+app.post("/admin/delete/:id", adminAuth, async (req, res) => {
   await User.findByIdAndDelete(req.params.id);
   res.json({ success: true });
 });
 
-// ================== SOCKET.IO ==================
+// ====== SOCKET.IO JWT AUTH ======
+io.use((socket, next) => {
+  try {
+    const token = socket.handshake.auth.token;
+    socket.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch {
+    next(new Error("Unauthorized"));
+  }
+});
+
 io.on("connection", (socket) => {
-  console.log("🟢 Socket connected:", socket.id);
-
   socket.on("sendMessage", async (data) => {
-    try {
-      const msg = await Message.create({
-        username: data.username,
-        message: data.message,
-        timestamp: data.timestamp || Date.now(),
-      });
+    if (!socket.user.isAllowed) return;
 
-      io.emit("newMessage", msg);
+    const msg = await Message.create({
+      ...data,
+      user: socket.user.id,
+      timestamp: new Date(),
+    });
 
-      // Email notifications (non-blocking)
-      sendChatroomEmails({
-        sender: msg.username,
-        message: msg.message,
-      }).catch(console.error);
-    } catch (err) {
-      console.error("Message error:", err);
-    }
-  });
-
-  socket.on("disconnect", () => {
-    console.log("🔴 Socket disconnected:", socket.id);
+    io.emit("newMessage", msg);
   });
 });
 
-// ================== START SERVER ==================
+// ====== START ======
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () =>
-  console.log(`🚀 API running on port ${PORT}`)
+  console.log(`API running on port ${PORT}`)
 );
