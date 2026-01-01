@@ -108,7 +108,35 @@ app.get(
       { expiresIn: "7d" }
     );
 
-    res.redirect(`myapp://login?token=${token}`);
+    // Ye naya HTML page serve karega
+    res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Login Successful</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: sans-serif; text-align: center; padding: 50px; background: #f0f0f0; }
+    .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>✅ Login Successful!</h2>
+    <p>Returning to ChatApp...</p>
+    <div class="spinner"></div>
+    <p><small>If not redirected automatically, <a href="myapp://login?token=${token}">click here</a> or close this tab.</small></p>
+  </div>
+
+  <script>
+    // Automatic redirect using JavaScript
+    window.location.href = "myapp://login?token=${token}";
+  </script>
+</body>
+</html>
+    `);
   }
 );
 
@@ -186,17 +214,21 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-  socket.on("sendMessage", async (data) => {
-    if (!socket.user.isAllowed) return;
+socket.on("sendMessage", async (data) => {
+  if (!socket.user.isAllowed) return;
 
-    const msg = await Message.create({
-      ...data,
-      user: socket.user.id,
-      timestamp: new Date(),
-    });
-
-    io.emit("newMessage", msg);
+  const msg = await Message.create({
+    text: data.text,
+    user: socket.user.id,
+    timestamp: new Date(),
   });
+
+  io.emit("newMessage", {
+    text: msg.text,
+    user: socket.user.id,
+    timestamp: msg.timestamp,
+  });
+});
 });
 
 // ====== START ======
