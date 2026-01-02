@@ -1,14 +1,52 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Download ChatApp</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Download Square</title>
+  <!-- Tailwind CSS via Play CDN (great for quick prototypes) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Font Awesome for download icon -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <style>
+    /* Optional subtle animation on button hover */
+    .download-btn {
+      transition: all 0.3s ease;
+    }
+    .download-btn:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    }
+    .download-btn:active {
+      transform: translateY(0);
+    }
+  </style>
 </head>
-<body>
-  <h1>Download ChatApp</h1>
-  <p>Get the latest version of the app:</p>
-  <ul>
-    <li><a href="/downloads/chatapp.apk">Android APK</a></li>
-    <li><a href="/downloads/chatapp.ipa">iOS TestFlight/IPA</a></li>
-  </ul>
+<body class="bg-gradient-to-br from-indigo-50 via-white to-cyan-50 min-h-screen flex items-center justify-center">
+  <div class="max-w-2xl w-full px-6 py-12 text-center">
+    <!-- App Title -->
+    <h1 class="text-5xl font-extrabold text-gray-900 mb-4">Square</h1>
+    
+    <!-- Subtitle/Description -->
+    <p class="text-xl text-gray-700 mb-10">
+      Get the latest version of the Square app and start using it today.
+    </p>
+    
+    <!-- Prominent Download Button -->
+    <a href="/square.apk" download
+       class="inline-flex items-center gap-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-lg px-10 py-6 rounded-2xl shadow-lg download-btn">
+      <i class="fas fa-download text-2xl"></i>
+      Download for Android (APK)
+    </a>
+    
+    <!-- Additional Info -->
+    <p class="mt-12 text-gray-600">
+      Latest version: 1.0.0<br>
+      File size: ~18 MB<br>
+      Requires Android 13.0+
+    </p>
+    
+  
+  </div>
 </body>
 </html>
