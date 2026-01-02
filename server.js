@@ -98,18 +98,20 @@ app.get(
 app.get(
   "/auth/google/callback",
   passport.authenticate("google", { session: false }),
-  (req, res) => {
+  async (req, res) => {
+    const user = await User.findById(req.user._id); // Always fetch fresh user
+
     const token = jwt.sign(
       {
-        id: req.user._id,
-        username: req.user.username,
-        isAllowed: req.user.isAllowed,
+        id: user._id,
+        username: user.username,
+        isAllowed: user.isAllowed,
       },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
-    // Ye naya HTML page serve karega
+    // Single HTML page, no duplicate res.send
     res.send(`
 <!DOCTYPE html>
 <html>
@@ -130,38 +132,7 @@ app.get(
     <div class="spinner"></div>
     <p><small>If not redirected automatically, <a href="myapp://login?token=${token}">click here</a> or close this tab.</small></p>
   </div>
-
   <script>
-    // Automatic redirect using JavaScript
-    window.location.href = "myapp://login?token=${token}";
-  </script>
-</body>
-</html>
-    `);
-    // Ye naya HTML page serve karega
-    res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Login Successful</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    body { font-family: sans-serif; text-align: center; padding: 50px; background: #f0f0f0; }
-    .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-    .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h2>✅ Login Successful!</h2>
-    <p>Returning to ChatApp...</p>
-    <div class="spinner"></div>
-    <p><small>If not redirected automatically, <a href="myapp://login?token=${token}">click here</a> or close this tab.</small></p>
-  </div>
-
-  <script>
-    // Automatic redirect using JavaScript
     window.location.href = "myapp://login?token=${token}";
   </script>
 </body>
@@ -172,20 +143,21 @@ app.get(
 
 // ====== USER API ======
 app.get("/me", jwtAuth, async (req, res) => {
-  const user = await User.findById(req.user.id);
+  const user = await User.findById(req.user.id); // Always fresh
   res.json(user);
 });
 
 // ====== CHAT API ======
 app.get("/chat/messages", jwtAuth, async (req, res) => {
-  if (!req.user.isAllowed)
+  const user = await User.findById(req.user.id); // Fresh DB check
+  if (!user.isAllowed)
     return res.status(403).json({ error: "Not approved" });
 
   const messages = await Message.find().sort({ timestamp: 1 });
   res.json(messages);
 });
 
-// ====== ADMIN (JWT BASED) ======
+// ====== ADMIN ======
 app.post("/admin/login", (req, res) => {
   const { username, password } = req.body;
 
@@ -233,10 +205,16 @@ app.post("/admin/delete/:id", adminAuth, async (req, res) => {
 });
 
 // ====== SOCKET.IO JWT AUTH ======
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth.token;
-    socket.user = jwt.verify(token, process.env.JWT_SECRET);
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Fetch fresh user from DB
+    const user = await User.findById(payload.id);
+    if (!user || !user.isAllowed) return next(new Error("Unauthorized"));
+
+    socket.user = user; // Overwrite with DB data
     next();
   } catch {
     next(new Error("Unauthorized"));
@@ -248,50 +226,42 @@ io.on("connection", (socket) => {
 
   socket.on("sendMessage", async (data) => {
     try {
-      // Check if user is allowed and message exists
-      if (!socket.user.isAllowed) return;
       if (!data.text || !data.text.trim()) return;
 
-      // Save message to database with timestamp
       const msg = await Message.create({
         username: socket.user.username,
         message: data.text.trim(),
-        timestamp: new Date() // Ensure timestamp exists
+        timestamp: new Date(),
       });
 
-      // Emit real-time message to all clients
       io.emit("newMessage", {
         username: msg.username,
         message: msg.message,
-        time: msg.time
+        time: msg.timestamp,
       });
 
-      // Fetch all allowed users with FCM tokens except sender
       const users = await User.find({
         isAllowed: true,
         fcmToken: { $exists: true, $ne: null },
-        _id: { $ne: socket.user.id } // exclude sender
+        _id: { $ne: socket.user._id },
       });
 
-      // Send push notifications in parallel
       await Promise.all(
-        users.map(user =>
-          admin.messaging().send({
-            token: user.fcmToken,
-            notification: {
-              title: "Square",
-              body: "You have one new notification from your College"
-            },
-            android: {
-              priority: "high"
-            },
-            data: {
-              type: "chat"
-            }
-          }).catch(err => console.error("FCM error:", err)) // log FCM errors
+        users.map((user) =>
+          admin
+            .messaging()
+            .send({
+              token: user.fcmToken,
+              notification: {
+                title: "Square",
+                body: "You have one new notification from your College",
+              },
+              android: { priority: "high" },
+              data: { type: "chat" },
+            })
+            .catch((err) => console.error("FCM error:", err))
         )
       );
-
     } catch (err) {
       console.error("Error in sendMessage:", err);
       socket.emit("error", { message: "Message could not be sent" });
@@ -302,22 +272,19 @@ io.on("connection", (socket) => {
     console.log(`User disconnected: ${socket.user.username}`);
   });
 });
-;
 
+// ====== FCM TOKEN ======
 app.post("/fcm/token", jwtAuth, async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: "No token" });
 
-  await User.findByIdAndUpdate(req.user.id, {
-    fcmToken: token
-  });
-
+  await User.findByIdAndUpdate(req.user.id, { fcmToken: token });
   res.json({ success: true });
 });
 
-
-// ====== START ======
+// ====== START SERVER ======
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () =>
   console.log(`API running on port ${PORT}`)
 );
+
