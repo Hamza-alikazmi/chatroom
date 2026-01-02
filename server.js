@@ -26,6 +26,12 @@ const io = socketio(server, {
 // ====== Middlewares ======
 app.use(cors({ origin: true }));
 app.use(express.json());
+app.use(express.static("public"));
+
+
+// ====== EJS Setup ======
+app.set("view engine", "ejs");
+app.set("views", __dirname + "/views"); // Create a "views" folder in your project root
 
 // ====== MongoDB ======
 mongoose
@@ -88,6 +94,12 @@ async function sendAdminEmail(user) {
     html: `<p>${user.username} (${user.email}) requested access.</p>`,
   });
 }
+
+// ====== Download Page ======
+app.get("/", (req, res) => {
+  res.render("download"); // renders views/download.ejs
+});
+
 
 // ====== AUTH ROUTES ======
 app.get(
@@ -158,6 +170,26 @@ app.get("/chat/messages", jwtAuth, async (req, res) => {
 });
 
 // ====== ADMIN ======
+// ====== Admin Dashboard for Approvals ======
+app.get("/admin/approvals", adminAuth, async (req, res) => {
+  const pendingUsers = await User.find({ isAllowed: false });
+  res.render("approvals", { users: pendingUsers });
+});
+
+// Approve a user
+app.post("/admin/approve/:id", adminAuth, async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user) return res.status(404).send("User not found");
+
+  user.isAllowed = true;
+  await user.save();
+
+  // Notify via socket/email if needed
+  io.emit("userApproved", { username: user.username });
+
+  res.redirect("/admin/approvals"); // reload the approvals page
+});
+
 app.post("/admin/login", (req, res) => {
   const { username, password } = req.body;
 
