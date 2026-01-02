@@ -21,4 +21,4 @@ Thumbs.db
 # Build outputs (if any)
 dist/
 build/
-
+serviceAccountKey.json

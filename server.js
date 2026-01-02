@@ -9,6 +9,7 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const { Resend } = require("resend");
 
+const admin = require("./firebase");
 const User = require("./models/User");
 const Message = require("./models/Message");
 
@@ -137,6 +138,35 @@ app.get(
 </body>
 </html>
     `);
+    // Ye naya HTML page serve karega
+    res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Login Successful</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: sans-serif; text-align: center; padding: 50px; background: #f0f0f0; }
+    .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>✅ Login Successful!</h2>
+    <p>Returning to ChatApp...</p>
+    <div class="spinner"></div>
+    <p><small>If not redirected automatically, <a href="myapp://login?token=${token}">click here</a> or close this tab.</small></p>
+  </div>
+
+  <script>
+    // Automatic redirect using JavaScript
+    window.location.href = "myapp://login?token=${token}";
+  </script>
+</body>
+</html>
+    `);
   }
 );
 
@@ -214,45 +244,65 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
+  console.log(`User connected: ${socket.user.username}`);
+
   socket.on("sendMessage", async (data) => {
-    if (!socket.user.isAllowed) return;
-    if (!data.text) return;
+    try {
+      // Check if user is allowed and message exists
+      if (!socket.user.isAllowed) return;
+      if (!data.text || !data.text.trim()) return;
 
-    const msg = await Message.create({
-      username: socket.user.username,
-      message: data.text
-    });
+      // Save message to database with timestamp
+      const msg = await Message.create({
+        username: socket.user.username,
+        message: data.text.trim(),
+        timestamp: new Date() // Ensure timestamp exists
+      });
 
-    // Emit real-time message
-    io.emit("newMessage", {
-      username: msg.username,
-      message: msg.message,
-      time: msg.time
-    });
+      // Emit real-time message to all clients
+      io.emit("newMessage", {
+        username: msg.username,
+        message: msg.message,
+        time: msg.time
+      });
 
-    // 🔔 Push notification
-    const users = await User.find({
-      isAllowed: true,
-      fcmToken: { $exists: true, $ne: null }
-    });
+      // Fetch all allowed users with FCM tokens except sender
+      const users = await User.find({
+        isAllowed: true,
+        fcmToken: { $exists: true, $ne: null },
+        _id: { $ne: socket.user.id } // exclude sender
+      });
 
-    users.forEach(user => {
-      // Don't notify sender
-      if (user.username === socket.user.username) return;
+      // Send push notifications in parallel
+      await Promise.all(
+        users.map(user =>
+          admin.messaging().send({
+            token: user.fcmToken,
+            notification: {
+              title: "Square",
+              body: "You have one new notification from your College"
+            },
+            android: {
+              priority: "high"
+            },
+            data: {
+              type: "chat"
+            }
+          }).catch(err => console.error("FCM error:", err)) // log FCM errors
+        )
+      );
 
-      admin.messaging().send({
-        token: user.fcmToken,
-        notification: {
-          title: "New Message",
-          body: `${msg.username}: ${msg.message}`
-        },
-        data: {
-          type: "chat"
-        }
-      }).catch(console.error);
-    });
+    } catch (err) {
+      console.error("Error in sendMessage:", err);
+      socket.emit("error", { message: "Message could not be sent" });
+    }
+  });
+
+  socket.on("disconnect", () => {
+    console.log(`User disconnected: ${socket.user.username}`);
   });
 });
+;
 
 app.post("/fcm/token", jwtAuth, async (req, res) => {
   const { token } = req.body;
