@@ -216,7 +216,6 @@ io.use((socket, next) => {
 io.on("connection", (socket) => {
   socket.on("sendMessage", async (data) => {
     if (!socket.user.isAllowed) return;
-
     if (!data.text) return;
 
     const msg = await Message.create({
@@ -224,12 +223,46 @@ io.on("connection", (socket) => {
       message: data.text
     });
 
+    // Emit real-time message
     io.emit("newMessage", {
       username: msg.username,
       message: msg.message,
       time: msg.time
     });
+
+    // 🔔 Push notification
+    const users = await User.find({
+      isAllowed: true,
+      fcmToken: { $exists: true, $ne: null }
+    });
+
+    users.forEach(user => {
+      // Don't notify sender
+      if (user.username === socket.user.username) return;
+
+      admin.messaging().send({
+        token: user.fcmToken,
+        notification: {
+          title: "New Message",
+          body: `${msg.username}: ${msg.message}`
+        },
+        data: {
+          type: "chat"
+        }
+      }).catch(console.error);
+    });
   });
+});
+
+app.post("/fcm/token", jwtAuth, async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: "No token" });
+
+  await User.findByIdAndUpdate(req.user.id, {
+    fcmToken: token
+  });
+
+  res.json({ success: true });
 });
 
 
